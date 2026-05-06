@@ -1,4 +1,4 @@
-# Synapse v2
+# Synapse
 
 > 💬 **Easiest setup:** clone this repo into a project of yours and ask
 > Claude Code to set Synapse up for you. The agent reads the SETUP docs in
@@ -122,14 +122,15 @@ root and orchestrates; the others run in git worktrees on feature branches.
 
 4. **Run the `claude` launcher wrapper** in every terminal (the one
    from `channel-plugin/SETUP.md` step 5). The first launch on each
-   machine will show a warning like *"channel plugin not on the
-   approved allowlist"* because we pass
+   machine will show a warning like _"channel plugin not on the
+   approved allowlist"_ because we pass
    `--dangerously-load-development-channels` — accept it. It's safe:
    everything runs locally and the warning exists because the plugin
    isn't signed on Anthropic's marketplace.
 
 5. **Brief the architect.** In the architect's terminal, prompt
    something like:
+
    > You are the architect for project `myproject`. Claim the role,
    > create the team, run roll call, invite the available engineers
    > by role (`frontend`, `backend`, `eval`, …), and broadcast the
@@ -177,14 +178,14 @@ on its own.
 
 ## Address scheme
 
-| Address | Meaning |
-|---|---|
-| `claude` | Global broadcast (admin only) |
-| `claude-{team}` | Broadcast to all members of a team |
-| `claude-{team}-{role}` | DM to a specific role in a team |
-| `claude-{role}` | DM to a teamless agent with that role |
-| `claude-{N}` | Default name when no team/role assigned (`claude-1`, `claude-2`, …) |
-| `admin`, `admin-web`, `admin-mobile` | Human admin seats |
+| Address                              | Meaning                                                             |
+| ------------------------------------ | ------------------------------------------------------------------- |
+| `claude`                             | Global broadcast (admin only)                                       |
+| `claude-{team}`                      | Broadcast to all members of a team                                  |
+| `claude-{team}-{role}`               | DM to a specific role in a team                                     |
+| `claude-{role}`                      | DM to a teamless agent with that role                               |
+| `claude-{N}`                         | Default name when no team/role assigned (`claude-1`, `claude-2`, …) |
+| `admin`, `admin-web`, `admin-mobile` | Human admin seats                                                   |
 
 Display name collisions auto-suffix `-2`, `-3`, …
 
@@ -194,11 +195,11 @@ The server side is fully env-configurable. `docker-compose.yml` references
 each setting through a `${VAR:-default}` so you can override without
 editing the file:
 
-| Env | Default | Meaning |
-|---|---|---|
-| `SYNAPSE_PORT` | `3004` | HTTP port (also the published Docker port) |
-| `SYNAPSE_DB_PATH` | `/data/synapse_v2.db` | sqlite location inside the container |
-| `SYNAPSE_INSTANCE` | `synapse-v2` | Identifier used in events / logs / container name |
+| Env                | Default               | Meaning                                           |
+| ------------------ | --------------------- | ------------------------------------------------- |
+| `SYNAPSE_PORT`     | `3004`                | HTTP port (also the published Docker port)        |
+| `SYNAPSE_DB_PATH`  | `/data/synapse_v2.db` | sqlite location inside the container              |
+| `SYNAPSE_INSTANCE` | `synapse-v2`          | Identifier used in events / logs / container name |
 
 Set any of them on the host shell, or copy
 [`server/.env.example`](./server/.env.example) to `server/.env` and edit
@@ -226,7 +227,7 @@ the network reachability boundary as the security boundary.
   the same box. Default and easiest.
 - **Home / office LAN** — bind to a private interface, restrict the
   port to your subnet via firewall (e.g. `ufw allow from 10.0.0.0/16
-  to any port 3004`). Fine for trusted networks.
+to any port 3004`). Fine for trusted networks.
 - **Mesh VPN** — Tailscale, ZeroTier, WireGuard, Nebula. The server
   binds to the VPN interface; only mesh members can reach it.
 
