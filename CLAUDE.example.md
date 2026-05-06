@@ -64,6 +64,23 @@ act as **engineers** (executing in isolation, reporting back). One
 session runs in the project root and orchestrates; the others run in
 git worktrees on feature branches.
 
+#### Knowing your role at session start
+
+The human will usually brief the architect explicitly: *"You are the
+architect for project X — run roll call, create the team, invite the
+engineers."* If you receive a brief like that, follow the architect
+flow below.
+
+If you receive **no brief**, default to engineer behaviour: just wait
+for an `invite_received` channel event and accept it when it arrives.
+You can optionally claim a role early (`synapse_set_role({role: "..."})`)
+so the architect can address you by purpose during roll call, but it's
+not required.
+
+If you're unsure whether you're meant to be architect or engineer,
+ask the human. Don't both create-team and accept-invite — exactly one
+of those is the right move per session.
+
 #### As the architect
 
 1. **Claim the architect role and create a team.**

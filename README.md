@@ -100,6 +100,56 @@ The canonical pattern is one Claude Code instance acting as **architect**
 (executing in isolation, reporting back). One session runs in the project
 root and orchestrates; the others run in git worktrees on feature branches.
 
+### Bootstrap — what the human does
+
+1. **Decide team size.** Typical: 1 architect + 2–4 engineers. Beyond
+   ~6 engineers the team channel gets noisy and the architect's review
+   queue bottlenecks.
+
+2. **Open N+1 terminals**, one per Claude Code instance you want
+   (architect + each engineer).
+
+3. **`cd` each terminal to the right place.**
+   - Architect terminal: the **project root**. The architect is the
+     only one allowed to commit to master, so they need to be where
+     master lives.
+   - Each engineer terminal: a **separate git worktree** on its own
+     feature branch.
+     ```bash
+     git worktree add ../proj-frontend feature/frontend
+     cd ../proj-frontend
+     ```
+
+4. **Run the `claude` launcher wrapper** in every terminal (the one
+   from `channel-plugin/SETUP.md` step 5). The first launch on each
+   machine will show a warning like *"channel plugin not on the
+   approved allowlist"* because we pass
+   `--dangerously-load-development-channels` — accept it. It's safe:
+   everything runs locally and the warning exists because the plugin
+   isn't signed on Anthropic's marketplace.
+
+5. **Brief the architect.** In the architect's terminal, prompt
+   something like:
+   > You are the architect for project `myproject`. Claim the role,
+   > create the team, run roll call, invite the available engineers
+   > by role (`frontend`, `backend`, `eval`, …), and broadcast the
+   > spec once everyone's accepted: <paste spec>.
+
+   That's the only manual instruction needed. The architect flow in
+   `CLAUDE.example.md` takes it from there.
+
+6. **Engineers need no human prompt** — as long as their project's
+   `CLAUDE.md` has the Synapse snippet, the inbound `invite_received`
+   channel event triggers a turn that auto-accepts and replies
+   `<role> ready`.
+
+7. **When the work is done**, the architect dissolves the team or
+   releases roles. Engineers can leave their worktrees and either
+   `/exit` their Claude Code sessions or stay online for the next
+   round.
+
+### Architect ↔ engineer flow
+
 A typical run looks like this:
 
 1. **Architect** claims a role, creates a team, and runs roll call:
@@ -166,8 +216,43 @@ nothing in this codebase hardcodes a personal handle. The `admin` /
 
 ## Security note
 
-Synapse v2 has no auth. Don't expose `:3004` to the public internet.
-Recommended deployments: LAN, VPN, or Tailscale.
+Synapse v2 has **no authentication**. Anyone who can reach `:3004` can
+register, send messages as any sender ID, and read all traffic. Treat
+the network reachability boundary as the security boundary.
+
+**Safe deployment patterns:**
+
+- **Single machine** — run the server on `localhost`, all clients on
+  the same box. Default and easiest.
+- **Home / office LAN** — bind to a private interface, restrict the
+  port to your subnet via firewall (e.g. `ufw allow from 10.0.0.0/16
+  to any port 3004`). Fine for trusted networks.
+- **Mesh VPN** — Tailscale, ZeroTier, WireGuard, Nebula. The server
+  binds to the VPN interface; only mesh members can reach it.
+
+**If you want to host this on a VPS or any cloud machine, put it
+behind a VPN. Do not expose `:3004` to the public internet.**
+Recommended overlays:
+
+- **[Tailscale](https://tailscale.com/)** — free for personal use,
+  zero-config mesh; the VPS becomes a Tailscale node and you point
+  clients at its `100.x.y.z` address. Simplest path for a hobbyist
+  setup.
+- **[Twingate](https://www.twingate.com/)** — zero-trust remote access
+  with finer-grained policy than a flat VPN; better fit if you'll
+  invite collaborators with limited scope.
+- **WireGuard / Nebula** — self-hosted overlay if you don't want a
+  managed provider in the loop.
+
+In all VPN setups, also configure the firewall on the VPS to only
+allow `:3004` from the VPN interface, not the public one. Belt and
+suspenders.
+
+**Reverse proxy with auth** (if you can't use a VPN) is a viable
+alternative: put nginx / Caddy in front of `:3004` with a real auth
+mechanism (mTLS, OAuth, basic-auth over HTTPS) and only let
+authenticated traffic through. Not the simplest path, but works if
+your collaborators don't all have VPN access.
 
 ## License
 
