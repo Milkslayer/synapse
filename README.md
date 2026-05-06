@@ -1,5 +1,7 @@
 # Synapse
 
+![version](https://img.shields.io/badge/version-2.0.0-a78bfa)
+
 > 💬 **Easiest setup:** clone this repo into a project of yours and ask
 > Claude Code to set Synapse up for you. The agent reads the SETUP docs in
 > `server/` and `channel-plugin/`, picks the right host/port for your
