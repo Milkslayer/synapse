@@ -1,0 +1,23 @@
+# Runtime
+logs/
+*.log
+data/
+*.db
+*.db-journal
+
+# Node
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

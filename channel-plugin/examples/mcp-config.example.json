@@ -1,0 +1,25 @@
+{
+  "_comment": "Excerpt for ~/.claude.json. Merge into your existing mcpServers block (top-level for global, or under projects.<cwd>.mcpServers for per-project). Substitute <SYNAPSE_DIR> with the absolute path where you cloned the repo, and <SYNAPSE_URL> with your server URL.",
+  "mcpServers": {
+    "synapse-v2": {
+      "type": "stdio",
+      "command": "python",
+      "args": [
+        "<SYNAPSE_DIR>/mcp-bridge/server_v2.py"
+      ],
+      "env": {
+        "SYNAPSE_URL": "<SYNAPSE_URL>"
+      }
+    },
+    "synapse-channel-v2": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "<SYNAPSE_DIR>/channel-plugin/server.js"
+      ],
+      "env": {
+        "SYNAPSE_URL": "<SYNAPSE_URL>"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "synapse-channel-v2",
+  "version": "2.0.0",
+  "description": "Real-time Synapse v2 message + identity + invite delivery",
+  "channels": [
+    {
+      "server": "synapse-channel-v2"
+    }
+  ],
+  "mcpServers": {
+    "synapse-channel-v2": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"],
+      "env": {
+        "SYNAPSE_URL": "http://localhost:3004"
+      }
+    }
+  }
+}

@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Synapse v2</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    background: #0a0a0a;
+    color: #e0e0e0;
+    min-height: 100vh;
+    padding: 24px;
+    font-size: 13px;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  .header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid #1a1a1a;
+  }
+  .title { font-size: 1.5em; font-weight: bold; letter-spacing: 2px; color: #fff; }
+  .badge { font-size: 0.75em; color: #555; letter-spacing: 1px; }
+  h2 {
+    font-size: 0.75em; letter-spacing: 2px; color: #666; text-transform: uppercase;
+    margin: 24px 0 10px 0; padding-bottom: 4px; border-bottom: 1px solid #1a1a1a;
+  }
+  h3 { font-size: 0.85em; color: #888; margin: 12px 0 6px 0; font-weight: normal; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .pane { background: #111; border: 1px solid #1d1d1d; border-radius: 8px; padding: 14px; }
+
+  .status-section { margin-bottom: 16px; }
+  .status-row {
+    display: grid; grid-template-columns: 14px 1fr auto auto 22px;
+    gap: 8px; align-items: center; padding: 6px 8px;
+    border-radius: 4px; font-size: 0.95em;
+  }
+  .forget-btn {
+    background: transparent; border: 1px solid #4a1d1d; color: #800;
+    width: 18px; height: 18px; border-radius: 3px; cursor: pointer;
+    font-family: inherit; font-size: 0.75em; padding: 0; line-height: 1;
+  }
+  .forget-btn:hover { background: #4a1d1d; color: #fcc; border-color: #800; }
+  .status-row:hover { background: #161616; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.active { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+  .dot.stale { background: #eab308; box-shadow: 0 0 6px #eab30888; }
+  .dot.offline { background: #555; }
+  .name { color: #ddd; }
+  .meta { color: #555; font-size: 0.85em; }
+  .seen { color: #444; font-size: 0.8em; }
+  .kind-admin { color: #c9a84c; }
+
+  .team-card {
+    background: #161616; border: 1px solid #222; border-radius: 6px;
+    padding: 10px; margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .team-card .team-info { flex: 1; min-width: 0; }
+  .team-card .team-name { font-weight: bold; color: #a78bfa; }
+  .team-card .team-meta { font-size: 0.8em; color: #555; margin-top: 2px; }
+  .team-members { margin-top: 6px; font-size: 0.85em; color: #888; }
+
+  .form { display: flex; flex-direction: column; gap: 6px; }
+  .form input, .form textarea, .form select {
+    background: #0a0a0a; border: 1px solid #2a2a2a; border-radius: 4px;
+    color: #ddd; padding: 6px 8px; font-family: inherit; font-size: 0.95em;
+  }
+  .form button {
+    background: #1d3a1d; border: 1px solid #2a5a2a; color: #ddd;
+    padding: 7px 12px; border-radius: 4px; cursor: pointer; font-family: inherit;
+  }
+  .form button:hover { background: #2a5a2a; }
+  .form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+  .messages { max-height: 400px; overflow-y: auto; }
+  .msg {
+    background: #161616; border: 1px solid #222; border-radius: 4px;
+    padding: 8px; margin-bottom: 6px; font-size: 0.9em;
+    cursor: pointer;
+  }
+  .msg:hover { border-color: #333; }
+  .msg .from { color: #a78bfa; font-weight: bold; }
+  .msg .to { color: #555; font-size: 0.85em; }
+  .msg .subject { color: #ddd; margin: 3px 0; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .msg .arrow { color: #444; font-size: 0.7em; flex-shrink: 0; }
+  .msg .body {
+    color: #888; white-space: pre-wrap; font-size: 0.85em; margin-top: 4px;
+    max-height: 0; overflow: hidden; transition: max-height 0.25s ease, margin-top 0.25s ease;
+  }
+  .msg.expanded .body { max-height: 1500px; margin-top: 6px; }
+  .msg.expanded .arrow { transform: rotate(90deg); display: inline-block; }
+  .msg .preview {
+    color: #666; font-size: 0.8em; margin-top: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .msg.expanded .preview { display: none; }
+  .msg .ts { color: #444; font-size: 0.75em; }
+  .msg .kind { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: 0.7em; margin-right: 4px; }
+  .kind.global { background: #4a1d1d; color: #f88; }
+  .kind.group { background: #1d3a4a; color: #6cf; }
+  .kind.instance { background: #2a2a2a; color: #aaa; }
+  .kind.admin { background: #4a3a1d; color: #e9b; }
+
+  .empty { color: #444; font-style: italic; text-align: center; padding: 12px; }
+  .tab {
+    background: #141414; border: 1px solid #222; color: #888; cursor: pointer;
+    padding: 5px 10px; border-radius: 4px; font-family: inherit; font-size: 0.8em;
+  }
+  .tab:hover { color: #ddd; }
+  .tab.active { background: #1d3a4a; border-color: #2a5a6a; color: #6cf; }
+  .err { color: #f66; font-size: 0.85em; }
+  .ok { color: #6f6; font-size: 0.85em; }
+  .footer { text-align: center; margin-top: 32px; font-size: 0.7em; color: #2a2a2a; }
+  .as-badge {
+    display: inline-block; font-size: 0.7em; color: #555; padding: 2px 6px;
+    background: #1a1a1a; border-radius: 3px; border: 1px solid #2a2a2a;
+  }
+  optgroup { color: #666; font-style: italic; }
+  optgroup option { color: #ddd; font-style: normal; padding-left: 8px; }
+
+  @media (max-width: 720px) {
+    body { padding: 12px; font-size: 14px; }
+    .grid { grid-template-columns: 1fr; gap: 16px; }
+    .header { margin-bottom: 14px; padding-bottom: 10px; }
+    .title { font-size: 1.2em; letter-spacing: 1px; }
+    h2 { margin: 16px 0 8px 0; }
+    .pane { padding: 10px; }
+    .form input, .form textarea, .form select {
+      padding: 10px; font-size: 1em;
+    }
+    .form button { padding: 12px; font-size: 1em; }
+    .status-row {
+      grid-template-columns: 12px 1fr auto 24px;
+      padding: 8px 6px;
+    }
+    .status-row .meta { display: none; }
+    .messages { max-height: 60vh; }
+    .msg { padding: 10px; font-size: 0.95em; }
+    .forget-btn { width: 24px; height: 24px; font-size: 0.9em; }
+    .tab { padding: 8px 14px; font-size: 0.85em; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div class="title">SYNAPSE v2</div>
+    <div class="badge"><span id="ping-status">connecting…</span></div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <h2>Instances</h2>
+      <div id="instances-active" class="status-section"></div>
+      <div id="instances-stale" class="status-section"></div>
+      <div id="instances-offline" class="status-section"></div>
+
+      <h2>Teams</h2>
+      <div id="teams"></div>
+    </div>
+    <div>
+      <h2>Send <span class="as-badge" id="send-as-label">as admin-web</span></h2>
+      <div class="pane">
+        <div class="form">
+          <select id="send-to">
+            <option value="">to: pick a recipient…</option>
+          </select>
+          <input id="send-subject" placeholder="subject">
+          <textarea id="send-body" placeholder="body" rows="3"></textarea>
+          <button onclick="sendMessage()">Send</button>
+          <div id="send-result"></div>
+        </div>
+      </div>
+
+      <h2>Recent messages</h2>
+      <div class="tabs" style="display:flex;gap:6px;margin-bottom:6px;">
+        <button class="tab active" data-tab="global" onclick="switchTab('global')">Global</button>
+        <button class="tab" data-tab="me" onclick="switchTab('me')">To me</button>
+      </div>
+      <div class="pane messages" id="messages"></div>
+    </div>
+  </div>
+
+  <div class="footer">synapse-v2 · port 3004</div>
+</div>
+
+<script>
+const API = location.origin
+
+async function fetchJSON(path, opts) {
+  try {
+    const res = await fetch(API + path, opts)
+    if (!res.ok) return { error: `HTTP ${res.status}` }
+    return await res.json()
+  } catch (e) { return { error: e.message } }
+}
+
+function timeAgo(s) {
+  if (s == null) return ''
+  if (s < 60) return `${s.toFixed(0)}s`
+  if (s < 3600) return `${(s/60).toFixed(0)}m`
+  if (s < 86400) return `${(s/3600).toFixed(1)}h`
+  return `${(s/86400).toFixed(1)}d`
+}
+
+function renderInstance(inst) {
+  const isAdmin = inst.kind === 'admin'
+  const forgetBtn = inst._status === 'offline'
+    ? `<button class="forget-btn" onclick="forgetInstance('${inst.id}','${inst.display_name}')" title="forget this instance">×</button>`
+    : '<span></span>'
+  return `<div class="status-row">
+    <span class="dot ${inst._status}"></span>
+    <span class="name ${isAdmin ? 'kind-admin' : ''}">${inst.display_name}</span>
+    <span class="meta">${inst.role || ''}${inst.team_id ? ' · team' : ''}</span>
+    <span class="seen">${timeAgo(inst.last_seen_ago)}</span>
+    ${forgetBtn}
+  </div>`
+}
+
+async function dissolveTeam(id, name) {
+  if (!myMWebId) {
+    alert('admin-web not registered yet — wait a moment and retry')
+    return
+  }
+  if (!confirm(`Dissolve team "${name}"? Members fall back to no-team; team broadcasts stop working.`)) return
+  const result = await fetchJSON(`/groups/${id}`, {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ by_id: myMWebId }),
+  })
+  if (result.error) {
+    alert('Dissolve failed: ' + result.error)
+  } else {
+    refreshRecipients()
+  }
+}
+
+async function forgetInstance(id, name) {
+  if (!myMWebId) {
+    alert('admin-web not registered yet — wait a moment and retry')
+    return
+  }
+  if (!confirm(`Forget ${name}? Removes the row permanently.`)) return
+  const result = await fetchJSON('/forget', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, by_id: myMWebId }),
+  })
+  if (result.error) {
+    alert('Forget failed: ' + result.error)
+  } else {
+    refreshRecipients()
+  }
+}
+
+function renderSection(label, list, status) {
+  if (!list || list.length === 0) return ''
+  list.forEach(i => i._status = status)
+  return `<h3>${label} (${list.length})</h3>` +
+    list.map(renderInstance).join('')
+}
+
+let allInstances = []
+
+async function refreshRecipients() {
+  const data = await fetchJSON('/recipients')
+  if (data.error) {
+    document.getElementById('instances-active').innerHTML = `<div class="err">${data.error}</div>`
+    return
+  }
+  document.getElementById('instances-active').innerHTML = renderSection('active', data.instances.active, 'active')
+  document.getElementById('instances-stale').innerHTML = renderSection('stale', data.instances.stale, 'stale')
+  document.getElementById('instances-offline').innerHTML = renderSection('offline', data.instances.offline, 'offline')
+
+  const teams = data.groups || []
+  document.getElementById('teams').innerHTML = teams.length === 0
+    ? `<div class="empty">no teams yet</div>`
+    : teams.map(t => `<div class="team-card">
+        <div class="team-info">
+          <div class="team-name">${t.name}</div>
+          <div class="team-meta">owner: ${t.owner_id ? t.owner_id.slice(0, 8) : '(ownerless)'} · ${t.active_members}/${t.members} active</div>
+        </div>
+        <button class="forget-btn" onclick="dissolveTeam('${t.id}','${t.name}')" title="dissolve this team">×</button>
+      </div>`).join('')
+
+  // Update send-to dropdown: groups for active claudes, team broadcasts, special targets
+  allInstances = [...data.instances.active, ...data.instances.stale, ...data.instances.offline]
+  const sendTo = document.getElementById('send-to')
+  const current = sendTo.value
+  const activeClaudes = data.instances.active.filter(i => i.kind === 'claude')
+  const staleClaudes = data.instances.stale.filter(i => i.kind === 'claude')
+  const liveTeams = (data.groups || []).filter(g => !g.dissolved_at)
+  const opts = ['<option value="">to: pick a recipient…</option>']
+  opts.push('<optgroup label="Special">')
+  opts.push('<option value="claude">claude — global broadcast (all claudes)</option>')
+  opts.push('<option value="admin">admin — all admin-* instances</option>')
+  opts.push('</optgroup>')
+  if (liveTeams.length) {
+    opts.push('<optgroup label="Team broadcasts">')
+    for (const t of liveTeams) {
+      opts.push(`<option value="claude-${t.name}">claude-${t.name} (${t.active_members}/${t.members} active)</option>`)
+    }
+    opts.push('</optgroup>')
+  }
+  if (activeClaudes.length) {
+    opts.push('<optgroup label="Active Claudes">')
+    for (const i of activeClaudes) {
+      opts.push(`<option value="${i.display_name}">${i.display_name}${i.role ? ' · ' + i.role : ''}</option>`)
+    }
+    opts.push('</optgroup>')
+  }
+  if (staleClaudes.length) {
+    opts.push('<optgroup label="Stale Claudes">')
+    for (const i of staleClaudes) {
+      opts.push(`<option value="${i.display_name}">${i.display_name} (stale)</option>`)
+    }
+    opts.push('</optgroup>')
+  }
+  sendTo.innerHTML = opts.join('')
+  if (current) sendTo.value = current
+}
+
+let currentTab = 'global'
+let myMWebId = null
+
+function switchTab(tab) {
+  currentTab = tab
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tab))
+  refreshMessages()
+}
+
+const expandedMsgs = new Set()
+
+function escHtml(s) {
+  const d = document.createElement('div')
+  d.textContent = s == null ? '' : String(s)
+  return d.innerHTML
+}
+
+function toggleMsg(el, id) {
+  el.classList.toggle('expanded')
+  if (expandedMsgs.has(id)) expandedMsgs.delete(id)
+  else expandedMsgs.add(id)
+}
+
+function renderMessages(msgs, emptyText) {
+  if (!msgs || msgs.length === 0) {
+    document.getElementById('messages').innerHTML = `<div class="empty">${emptyText}</div>`
+    return
+  }
+  document.getElementById('messages').innerHTML = msgs.map(m => {
+    const recipients = m.resolved_ids ? m.resolved_ids.length : 1
+    const expanded = expandedMsgs.has(m.id) ? ' expanded' : ''
+    const body = m.body || ''
+    const preview = body.replace(/\s+/g, ' ').slice(0, 120)
+    return `<div class="msg${expanded}" onclick="toggleMsg(this, '${m.id}')">
+      <div><span class="kind ${m.recipient_kind}">${m.recipient_kind}</span><span class="from">${escHtml(m.sender_name)}</span> <span class="to">→ ${escHtml(m.recipient_addr)}</span> <span class="seen">(${recipients} recipient${recipients === 1 ? '' : 's'})</span></div>
+      <div class="subject"><span>${escHtml(m.subject)}</span><span class="arrow">▶</span></div>
+      <div class="preview">${escHtml(preview)}${body.length > 120 ? '…' : ''}</div>
+      <div class="body">${escHtml(body)}</div>
+      <div class="ts">${m.timestamp}</div>
+    </div>`
+  }).join('')
+}
+
+async function refreshMessages() {
+  if (currentTab === 'global') {
+    const data = await fetchJSON('/messages?limit=50')
+    if (data.error) {
+      document.getElementById('messages').innerHTML = `<div class="err">${data.error}</div>`
+      return
+    }
+    renderMessages(data.messages || [], 'no messages yet')
+  } else {
+    if (!myMWebId) {
+      document.getElementById('messages').innerHTML = `<div class="empty">register admin-web first (auto-runs in background)</div>`
+      return
+    }
+    const data = await fetchJSON(`/inbox/${myMWebId}`)
+    if (!Array.isArray(data)) {
+      document.getElementById('messages').innerHTML = `<div class="err">${data.error || 'no inbox data'}</div>`
+      return
+    }
+    renderMessages(data, 'no messages addressed to admin-web yet')
+  }
+}
+
+async function sendMessage() {
+  const to = document.getElementById('send-to').value
+  const subject = document.getElementById('send-subject').value
+  const body = document.getElementById('send-body').value
+  if (!myMWebId) {
+    document.getElementById('send-result').innerHTML = '<div class="err">admin-web not registered yet — wait a moment</div>'
+    return
+  }
+  if (!to || !subject) {
+    document.getElementById('send-result').innerHTML = '<div class="err">need recipient and subject</div>'
+    return
+  }
+  const result = await fetchJSON('/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: myMWebId, to, subject, body }),
+  })
+  if (result.error) {
+    document.getElementById('send-result').innerHTML = `<div class="err">${result.error}</div>`
+  } else {
+    document.getElementById('send-result').innerHTML = `<div class="ok">sent → ${result.delivered_to} recipient(s)</div>`
+    document.getElementById('send-subject').value = ''
+    document.getElementById('send-body').value = ''
+    refreshMessages()
+  }
+}
+
+async function ping() {
+  const r = await fetchJSON('/ping')
+  document.getElementById('ping-status').textContent = r.error ? `offline: ${r.error}` : `${r.service} v${r.version} · live`
+}
+
+// Heartbeat ourselves into the recipients list as admin-web while the page is open
+async function selfHeartbeat() {
+  // Look up an existing admin-web id, otherwise register
+  const data = await fetchJSON('/recipients')
+  if (data.error) return
+  let mWeb = [...data.instances.active, ...data.instances.stale, ...data.instances.offline].find(i => i.display_name === 'admin-web')
+  let id = mWeb && mWeb.id
+  if (!id) {
+    const reg = await fetchJSON('/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'admin', preferred_name: 'admin-web' }),
+    })
+    if (reg.error) return
+    id = reg.id
+  }
+  myMWebId = id
+  await fetchJSON('/heartbeat', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  })
+}
+
+ping()
+selfHeartbeat()
+refreshRecipients().then(refreshMessages)
+setInterval(() => { refreshRecipients(); refreshMessages() }, 5000)
+setInterval(selfHeartbeat, 10000)
+setInterval(ping, 30000)
+</script>
+</body>
+</html>

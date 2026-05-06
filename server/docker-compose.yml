@@ -1,0 +1,16 @@
+services:
+  synapse-v2:
+    build: .
+    container_name: ${SYNAPSE_INSTANCE:-synapse-v2}
+    restart: unless-stopped
+    ports:
+      - "${SYNAPSE_PORT:-3004}:${SYNAPSE_PORT:-3004}"
+    environment:
+      SYNAPSE_PORT: "${SYNAPSE_PORT:-3004}"
+      SYNAPSE_DB_PATH: "${SYNAPSE_DB_PATH:-/data/synapse_v2.db}"
+      SYNAPSE_INSTANCE: "${SYNAPSE_INSTANCE:-synapse-v2}"
+    volumes:
+      - synapse-v2-data:/data
+
+volumes:
+  synapse-v2-data:
