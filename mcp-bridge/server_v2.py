@@ -181,13 +181,19 @@ def event_poll_loop():
                     if ev["type"] == "identity_changed":
                         new_name = ev["payload"].get("display_name")
                         if new_name:
+                            name_changed = False
                             with _state_lock:
                                 if new_name != DISPLAY_NAME:
                                     log.info(f"identity_changed: {DISPLAY_NAME} -> {new_name}")
                                     DISPLAY_NAME = new_name
                                     save_lease({"id": INSTANCE_ID, "display_name": new_name, "registered_at": time.time()})
-                            # Notify Claude that tool descriptions have changed
-                            stdout_send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+                                    name_changed = True
+                            # Notify Claude only when the name actually changed. The
+                            # server can re-deliver identity_changed events, so emitting
+                            # list_changed on every one floods the client with tool-list
+                            # refreshes.
+                            if name_changed:
+                                stdout_send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
         except Exception as e:
             log.warning(f"event poll failed: {e}")
         time.sleep(5)
