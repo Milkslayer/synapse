@@ -13,7 +13,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 
 # --- Config ---------------------------------------------------------------
@@ -49,6 +49,9 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Concurrent handler threads: wait for a writer instead of raising
+    # "database is locked".
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 
@@ -1013,6 +1016,11 @@ def _load_ui():
 
 
 class V2Handler(BaseHTTPRequestHandler):
+    # Reap connections whose peer goes silent (idle keep-alive, dead poller).
+    # Without this a parked read blocks its handler thread forever — and on a
+    # non-threaded server that freezes the whole service.
+    timeout = 60
+
     def log_message(self, fmt, *args):
         pass
 
@@ -1164,9 +1172,16 @@ def _dispatch_mcp(name, args):
 
 # --- Main ----------------------------------------------------------------
 
+def make_server():
+    # ThreadingHTTPServer: one hung client must never block the rest of the
+    # network. Handlers are stateless and every DB access opens its own
+    # SQLite connection, so per-connection threads are safe.
+    return ThreadingHTTPServer(("0.0.0.0", PORT), V2Handler)
+
+
 if __name__ == "__main__":
     init_db()
     threading.Thread(target=cleanup_loop, daemon=True).start()
-    server = HTTPServer(("0.0.0.0", PORT), V2Handler)
+    server = make_server()
     print(f"{INSTANCE_NAME} running on http://0.0.0.0:{PORT} (db={DB_PATH})")
     server.serve_forever()

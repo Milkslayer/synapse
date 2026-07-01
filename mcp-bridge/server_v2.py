@@ -154,6 +154,11 @@ def heartbeat_loop():
                 iid = INSTANCE_ID
             if iid:
                 http_post("/heartbeat", {"id": iid}, timeout=3)
+            elif register_with_server():
+                # Registration failed at startup (server unreachable) and just
+                # recovered. Tool descriptions embed the id/display name, so
+                # refresh once — a real change, not a per-poll re-emit.
+                stdout_send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
         except Exception as e:
             log.warning(f"heartbeat failed: {e}")
         time.sleep(HEARTBEAT_INTERVAL_S)
