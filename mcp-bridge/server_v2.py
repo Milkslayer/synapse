@@ -148,7 +148,14 @@ def register_with_server():
         INSTANCE_ID = result["id"]
         DISPLAY_NAME = result["display_name"]
         LAST_EVENT_TS = None
-    save_lease({"id": INSTANCE_ID, "display_name": DISPLAY_NAME, "registered_at": time.time()})
+    # Carry the previously-synced session_id forward -- a bridge respawn
+    # re-registers from the lease, and losing session_id here would defeat
+    # the old-map acceptance check in _read_session_mapping.
+    prior_session = (lease or {}).get("session_id")
+    if prior_session:
+        _sync_state["session_id"] = prior_session
+    save_lease({"id": INSTANCE_ID, "display_name": DISPLAY_NAME,
+                "session_id": _sync_state["session_id"], "registered_at": time.time()})
     log.info(f"Registered: id={INSTANCE_ID} display_name={DISPLAY_NAME} reactivated={result.get('reactivated', False)}")
     return True
 
@@ -160,21 +167,30 @@ def register_with_server():
 # continuity so a resumed session reclaims (adopts) its previous identity --
 # UUID, inbox and team seat -- instead of piling up claude-N ghosts.
 
-_sync_state = {"slug": None, "held_display": None, "full_scan_done": False}
+_sync_state = {"slug": None, "held_display": None, "full_scan_done": False,
+               "session_id": None}  # recorded into the lease for respawn continuity
 
 _TITLE_RE = re.compile(r'"customTitle"\s*:\s*"((?:[^"\\]|\\.)*)"')
 
 
 def _read_session_mapping():
     try:
-        st = os.stat(SESSION_MAP_FILE)
-        if st.st_mtime < BRIDGE_START_TS - 300:
-            # Windows reuses PIDs: a mapping older than this bridge's own start
-            # belongs to whatever dead process used to own our PPID. Ignore it --
-            # our session's hook rewrites the file at every start/resume.
-            return None
         with open(SESSION_MAP_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        st = os.stat(SESSION_MAP_FILE)
+        if st.st_mtime >= BRIDGE_START_TS - 120:
+            # Fresh map: written by our session's hook around this bridge's
+            # start (SessionStart and MCP spawn are near-simultaneous).
+            return data
+        # Older map: trust it only if it names the session this lease already
+        # synced before -- that's a bridge respawn mid-session (same parent
+        # process, same PPID, hook did not re-fire). A stale map left by some
+        # DEAD process that used to own our PID fails this check, which is the
+        # Windows PID-reuse guard.
+        lease = load_lease()
+        if lease and lease.get("session_id") and lease.get("session_id") == data.get("session_id"):
+            return data
+        return None
     except Exception:
         return None
 
@@ -237,7 +253,8 @@ def _absorb_set_name(result, slug=None):
             DISPLAY_NAME = result["display_name"]
             changed = True
         if changed:
-            save_lease({"id": INSTANCE_ID, "display_name": DISPLAY_NAME, "registered_at": time.time()})
+            save_lease({"id": INSTANCE_ID, "display_name": DISPLAY_NAME,
+                        "session_id": _sync_state["session_id"], "registered_at": time.time()})
     if changed:
         # Real change only -- re-emitting on every poll floods the client.
         stdout_send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
@@ -255,6 +272,7 @@ def session_name_sync():
     mapping = _read_session_mapping()
     if not mapping:
         return
+    _sync_state["session_id"] = mapping.get("session_id")  # persisted via lease saves
     slug = _slugify(_extract_custom_title(mapping.get("transcript_path")) or "")
     if not slug:
         return
@@ -283,6 +301,11 @@ def heartbeat_loop():
                 iid = INSTANCE_ID
             if iid:
                 http_post("/heartbeat", {"id": iid}, timeout=3)
+                # sync may swap INSTANCE_ID (identity takeover). This thread is
+                # sequential (heartbeat completes before the swap), but a
+                # concurrent MAIN-thread tool call can POST the old id in that
+                # instant -- the server answers unknown_instance once and the
+                # next call self-heals with the new id. Benign.
                 session_name_sync()
             elif register_with_server():
                 # Registration failed at startup (server unreachable) and just
@@ -321,7 +344,9 @@ def event_poll_loop():
                                 if new_name != DISPLAY_NAME:
                                     log.info(f"identity_changed: {DISPLAY_NAME} -> {new_name}")
                                     DISPLAY_NAME = new_name
-                                    save_lease({"id": INSTANCE_ID, "display_name": new_name, "registered_at": time.time()})
+                                    save_lease({"id": INSTANCE_ID, "display_name": new_name,
+                                                "session_id": _sync_state["session_id"],
+                                                "registered_at": time.time()})
                                     name_changed = True
                             # Notify Claude only when the name actually changed. The
                             # server can re-deliver identity_changed events, so emitting

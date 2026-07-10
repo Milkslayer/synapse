@@ -159,5 +159,44 @@ snap = s.get_recipients()
 all_entries = [i for b in ("active", "stale", "offline") for i in snap["instances"][b]]
 check("recipients carries session_id", any(i.get("session_id") == "sess-C" for i in all_entries))
 
+# --- 13. COALESCE: manual set-name without session_id keeps continuity --------
+k = s.register("claude")
+s.set_name(k["id"], "keeper", session_id="sess-K")
+s.set_name(k["id"], "keeper-renamed")               # manual call, no session id
+check("manual rename keeps stored session_id", row(k["id"])["session_id"] == "sess-K", str(row(k["id"])))
+set_status(k["id"], "offline")
+backdate(k["id"], 300)
+k2 = s.register("claude")
+r = s.set_name(k2["id"], "keeper-renamed", session_id="sess-K")
+check("takeover survives an earlier manual rename",
+      r.get("adopted") is True and r.get("id") == k["id"], str(r))
+
+# --- 14. name-only reclaim clears a role-derived role --------------------------
+r1 = s.register("claude")
+s.set_role(r1["id"], "nightwatch")                   # display claude-nightwatch
+set_status(r1["id"], "offline")
+backdate(r1["id"], 300)
+r2 = s.register("claude")
+r = s.set_name(r2["id"], "nightwatch", session_id="sess-R2")
+check("role-ghost name reclaimed", r.get("display_name") == "claude-nightwatch", str(r))
+g_row = row(r1["id"])
+check("ghost role cleared with its name", g_row["role"] is None, str(g_row))
+check("ghost renamed to claude-N", g_row["display_name"].split("-")[-1].isdigit(), str(g_row))
+
+# --- 15. team-seated stale holder is never name-reclaimed ----------------------
+t1 = s.register("claude")
+tg = s.create_group("fortress", t1["id"])
+s.set_team(t1["id"], tg["id"], "gate", m["id"])      # display claude-fortress-gate
+set_status(t1["id"], "offline")
+backdate(t1["id"], 300)
+t2 = s.register("claude")
+r = s.set_name(t2["id"], "fortress-gate", session_id="sess-T2")
+check("claimer suffixed instead of evicting the seat",
+      r.get("display_name") == "claude-fortress-gate-2", str(r))
+t_row = row(t1["id"])
+check("seated ghost untouched (name/team/role intact)",
+      t_row["display_name"] == "claude-fortress-gate" and t_row["team_id"] == tg["id"]
+      and t_row["role"] == "gate", str(t_row))
+
 print(f"\n{len(PASS)} passed, {len(FAIL)} failed")
 sys.exit(1 if FAIL else 0)

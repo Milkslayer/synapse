@@ -435,20 +435,34 @@ def set_name(iid, name, session_id=None):
             "SELECT * FROM instances WHERE display_name = ? AND id != ?",
             (base, iid)
         ).fetchone()
-        if holder and not _is_live(holder):
+        if holder and not _is_live(holder) and not holder["team_id"]:
             # Name-only reclaim: the stale holder loses the name (renamed to a
-            # fresh claude-N) but keeps its identity and inbox.
+            # fresh claude-N) but keeps its identity and inbox. Team-seated
+            # holders are exempt -- their name belongs to the team machinery
+            # (claude-{team}-{role} addressing must survive a colliding session
+            # name), so the claimer falls through to a -2 suffix instead.
             fallback = _next_unassigned_name(conn, exclude_id=holder["id"])
-            conn.execute("UPDATE instances SET display_name = ? WHERE id = ?",
-                         (fallback, holder["id"]))
+            # A ghost whose display derived from its role must not keep a role
+            # pointing at a name it no longer displays.
+            clear_role = bool(holder["role"]) and base == f"claude-{holder['role']}"
+            if clear_role:
+                conn.execute("UPDATE instances SET display_name = ?, role = NULL WHERE id = ?",
+                             (fallback, holder["id"]))
+            else:
+                conn.execute("UPDATE instances SET display_name = ? WHERE id = ?",
+                             (fallback, holder["id"]))
             _emit_event(conn, holder["id"], "identity_changed",
-                        {"display_name": fallback, "role": holder["role"],
+                        {"display_name": fallback,
+                         "role": None if clear_role else holder["role"],
                          "team_id": holder["team_id"], "reason": "name_reclaimed_by_session"})
 
         display = _claim_name(conn, base, exclude_id=iid)  # live holder -> -2 suffix
         changed = display != inst["display_name"]
         conn.execute(
-            "UPDATE instances SET display_name = ?, session_id = ? WHERE id = ?",
+            # COALESCE: a manual set-name without a known session id must not
+            # NULL the stored one -- that would silently cost this identity its
+            # resume-takeover.
+            "UPDATE instances SET display_name = ?, session_id = COALESCE(?, session_id) WHERE id = ?",
             (display, session_id, iid)
         )
         if changed:
