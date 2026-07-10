@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -34,6 +35,13 @@ LEASE_DIR = os.environ.get(
     os.path.join(os.path.expanduser("~"), ".claude", "synapse-v2"),
 )
 LEASE_FILE = os.path.join(LEASE_DIR, f"ppid-{PPID}.json")
+
+# Session-name sync: the SessionStart hook (session_map_hook.py) writes
+# session-ppid-{pid}.json for every ancestor PID of the hook process; exactly
+# one of those PIDs is our PPID (the Claude Code process itself), which pairs
+# us with the session's id + transcript path.
+SESSION_MAP_FILE = os.path.join(LEASE_DIR, f"session-ppid-{PPID}.json")
+BRIDGE_START_TS = time.time()
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -145,6 +153,127 @@ def register_with_server():
     return True
 
 
+
+# --- Session-name sync ----------------------------------------------------
+# Mirrors the client session's name (customTitle in the transcript) to the
+# Synapse display name as claude-{slug}. session_id is sent as proof of
+# continuity so a resumed session reclaims (adopts) its previous identity --
+# UUID, inbox and team seat -- instead of piling up claude-N ghosts.
+
+_sync_state = {"slug": None, "held_display": None, "full_scan_done": False}
+
+_TITLE_RE = re.compile(r'"customTitle"\s*:\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _read_session_mapping():
+    try:
+        st = os.stat(SESSION_MAP_FILE)
+        if st.st_mtime < BRIDGE_START_TS - 300:
+            # Windows reuses PIDs: a mapping older than this bridge's own start
+            # belongs to whatever dead process used to own our PPID. Ignore it --
+            # our session's hook rewrites the file at every start/resume.
+            return None
+        with open(SESSION_MAP_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _extract_custom_title(transcript_path):
+    """Last customTitle in the transcript. Tail-read 256KB (titles ride on
+    recent entry envelopes); one full-file fallback scan covers sessions whose
+    recent lines predate the tail window."""
+    if not transcript_path:
+        return None
+    try:
+        size = os.path.getsize(transcript_path)
+        with open(transcript_path, "rb") as f:
+            f.seek(max(0, size - 262144))
+            chunk = f.read().decode("utf-8", errors="ignore")
+        found = _TITLE_RE.findall(chunk)
+        if not found and size > 262144 and not _sync_state["full_scan_done"]:
+            _sync_state["full_scan_done"] = True
+            with open(transcript_path, "rb") as f:
+                whole = f.read().decode("utf-8", errors="ignore")
+            found = _TITLE_RE.findall(whole)
+        if not found:
+            return None
+        return json.loads(f'"{found[-1]}"')  # unescape the JSON string
+    except Exception:
+        return None
+
+
+def _slugify(title):
+    """Session title -> Synapse name token (lowercase, a-z0-9-, starts with a
+    letter, <=31 chars). None when nothing valid remains -- don't guess."""
+    s = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    s = re.sub(r"-{2,}", "-", s)[:31].rstrip("-")
+    if not s or not ("a" <= s[0] <= "z"):
+        return None
+    return s
+
+
+def _absorb_set_name(result, slug=None):
+    """Fold a /identity/set-name response into local state. Handles identity
+    takeover (server hands us our session's previous UUID). Returns True if
+    id or display name changed."""
+    global INSTANCE_ID, DISPLAY_NAME, LAST_EVENT_TS
+    if not isinstance(result, dict) or "display_name" not in result:
+        return False
+    held = result.get("error") == "team_role_name_precedence"
+    if slug is not None:
+        _sync_state["slug"] = slug
+        _sync_state["held_display"] = result["display_name"] if held else None
+    changed = False
+    with _state_lock:
+        new_id = result.get("id") or INSTANCE_ID
+        if new_id != INSTANCE_ID:
+            log.info(f"identity takeover: {INSTANCE_ID} -> {new_id} (session resumed)")
+            INSTANCE_ID = new_id
+            LAST_EVENT_TS = None  # new event stream: fetch the adopted row's undelivered events
+            changed = True
+        if result["display_name"] != DISPLAY_NAME:
+            log.info(f"session-name sync: {DISPLAY_NAME} -> {result['display_name']}")
+            DISPLAY_NAME = result["display_name"]
+            changed = True
+        if changed:
+            save_lease({"id": INSTANCE_ID, "display_name": DISPLAY_NAME, "registered_at": time.time()})
+    if changed:
+        # Real change only -- re-emitting on every poll floods the client.
+        stdout_send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+    return changed
+
+
+def session_name_sync():
+    """One sync tick; called from the heartbeat loop. Cheap no-op until a
+    session mapping and a title exist."""
+    with _state_lock:
+        iid = INSTANCE_ID
+        current = DISPLAY_NAME
+    if not iid:
+        return
+    mapping = _read_session_mapping()
+    if not mapping:
+        return
+    slug = _slugify(_extract_custom_title(mapping.get("transcript_path")) or "")
+    if not slug:
+        return
+    expected = f"claude-{slug}"
+    if _sync_state["slug"] == slug:
+        # Already synced this slug: re-assert only if our display drifted
+        # (role released, name reclaimed while we were briefly stale, ...).
+        if current == expected or (current or "").startswith(expected + "-"):
+            return
+        if _sync_state["held_display"] is not None and current == _sync_state["held_display"]:
+            return  # team/role precedence hold: pause until the display changes
+    result = http_post("/identity/set-name",
+                       {"id": iid, "name": slug, "session_id": mapping.get("session_id")})
+    if isinstance(result, dict) and "display_name" in result:
+        _absorb_set_name(result, slug=slug)  # records _sync_state internally
+    else:
+        log.warning(f"set-name failed: {result}")
+
+
 # --- Background loops ----------------------------------------------------
 
 def heartbeat_loop():
@@ -154,6 +283,7 @@ def heartbeat_loop():
                 iid = INSTANCE_ID
             if iid:
                 http_post("/heartbeat", {"id": iid}, timeout=3)
+                session_name_sync()
             elif register_with_server():
                 # Registration failed at startup (server unreachable) and just
                 # recovered. Tool descriptions embed the id/display name, so
@@ -253,6 +383,15 @@ def build_tools():
             "name": "synapse_release_role",
             "description": "Drop your role. Display name reverts to claude-N (or claude-{team}-member if you're in a team).",
             "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "synapse_set_name",
+            "description": f"Claim claude-{{name}} as your display name. (Session-name sync sets this automatically from the session title; use this to claim one manually.) Stale holders are reclaimed; a live holder gives you a -2 suffix; team/role names take precedence. You are currently **{name}**.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "lowercase, a-z0-9 and dashes, starts with a letter"}},
+                "required": ["name"],
+            },
         },
         {
             "name": "synapse_create_team",
@@ -374,6 +513,16 @@ def dispatch_tool(name, args):
 
     if name == "synapse_release_role":
         return http_post("/identity/release-role", {"id": iid})
+
+    if name == "synapse_set_name":
+        mapping = _read_session_mapping() or {}
+        result = http_post("/identity/set-name", {
+            "id": iid,
+            "name": args.get("name"),
+            "session_id": mapping.get("session_id"),
+        })
+        _absorb_set_name(result)  # keep local id/name coherent on takeover
+        return result
 
     if name == "synapse_create_team":
         return http_post("/groups", {"name": args.get("name"), "owner_id": iid})

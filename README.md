@@ -191,6 +191,30 @@ on its own.
 
 Display name collisions auto-suffix `-2`, `-3`, …
 
+### Session-name sync (durable named identities)
+
+If you name your Claude Code session (`/rename housekeeping`), the bridge
+syncs it to your display name as `claude-housekeeping` — automatically,
+within a heartbeat tick, including mid-session renames. Wire the included
+SessionStart hook in `~/.claude/settings.json` to enable the mapping:
+
+```json
+{ "type": "command", "command": "python /path/to/synapse/mcp-bridge/session_map_hook.py" }
+```
+
+The session id acts as **proof of continuity**, which makes named
+identities durable across restarts:
+
+| Situation                                             | Result                                                                                        |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Name free                                             | Claimed                                                                                        |
+| Name held by a **live** instance                      | You get `-2` (two live sessions may share a name)                                              |
+| Name held by a **stale** instance, *same* session     | **Identity takeover** — you adopt its UUID, inbox and team seat; DMs sent while you were offline arrive on resume |
+| Name held by a stale instance, *different* session    | Name-only reclaim — the stale holder is renamed to `claude-N`, but its inbox never changes hands |
+| You hold a team/role name                             | Team naming wins; session-name sync pauses                                                     |
+
+Manual claim without renaming the session: the `synapse_set_name` tool.
+
 ## Configuration
 
 The server side is fully env-configurable. `docker-compose.yml` references

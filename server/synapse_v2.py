@@ -122,6 +122,13 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_events_target ON events(target_id, delivered_at);
     """)
+    # Migration: instances.session_id ties an instance to the client session
+    # it serves, making named identities durable across process restarts.
+    # ALTER fails harmlessly where the column already exists.
+    try:
+        conn.execute("ALTER TABLE instances ADD COLUMN session_id TEXT")
+    except sqlite3.OperationalError:
+        pass
     conn.commit()
     conn.close()
 
@@ -348,6 +355,108 @@ def release_role(iid):
         _emit_event(conn, iid, "identity_changed", {"display_name": new_display, "role": None, "team_id": inst["team_id"]})
         conn.commit()
         return {"display_name": new_display, "role": None}
+    finally:
+        conn.close()
+
+
+def set_name(iid, name, session_id=None):
+    """Session-name sync: claim `claude-{name}` as this instance's display name.
+
+    `session_id` is the caller's session UUID and is the proof of continuity.
+    Resolution rules, in order:
+      - caller holds a team/role      -> error team_role_name_precedence
+                                         (team machinery owns the display name)
+      - a NON-ACTIVE instance carries the same session_id
+                                      -> identity takeover: caller adopts that
+                                         row (UUID, inbox, team seat). A resumed
+                                         session IS the same instance it was.
+      - requested name free           -> claim it
+      - held by an ACTIVE instance    -> collision suffix (claude-{name}-2, ...)
+      - held by a NON-ACTIVE instance with different/no session_id
+                                      -> name-only reclaim: stale holder is
+                                         renamed to a fresh claude-N; its inbox
+                                         is never handed to a different session.
+    """
+    try:
+        _validate_name_token(name, "name")
+    except ValueError as e:
+        return {"error": str(e)}
+    conn = get_db()
+    try:
+        inst = conn.execute("SELECT * FROM instances WHERE id = ?", (iid,)).fetchone()
+        if not inst:
+            return {"error": "unknown_instance"}
+        if inst["kind"] != "claude":
+            return {"error": "only_claude_can_set_names"}
+
+        def _is_live(row):
+            try:
+                age = now_ts() - datetime.fromisoformat(row["last_seen_at"]).timestamp()
+            except Exception:
+                return False
+            return row["status"] == "active" and age <= ACTIVE_TIMEOUT_S
+
+        # Team/role naming wins over session names -- never rename a seated
+        # instance, and never let name sync destroy a live team member.
+        if inst["team_id"] or inst["role"]:
+            return {"id": iid, "display_name": inst["display_name"],
+                    "adopted": False, "error": "team_role_name_precedence"}
+
+        # 1. Identity takeover: a previous process of the SAME session left a
+        #    row behind. Adopt it -- same UUID means undelivered DMs, reads and
+        #    team seat carry over. Mirrors register()'s lease-takeover rule
+        #    ("presenting the UUID proves ownership"): presenting the session
+        #    id proves continuity.
+        adopted = False
+        if session_id:
+            prev = conn.execute(
+                "SELECT * FROM instances WHERE session_id = ? AND id != ? "
+                "ORDER BY last_seen_at DESC",
+                (session_id, iid)
+            ).fetchone()
+            if prev and not _is_live(prev):
+                conn.execute("DELETE FROM instances WHERE id = ?", (iid,))
+                conn.execute(
+                    "UPDATE instances SET status = 'active', last_seen_at = ? WHERE id = ?",
+                    (now_iso(), prev["id"])
+                )
+                iid = prev["id"]
+                inst = conn.execute("SELECT * FROM instances WHERE id = ?", (iid,)).fetchone()
+                adopted = True
+                if inst["team_id"] or inst["role"]:
+                    # Adopted a seated row: keep the team-derived name, but the
+                    # caller must still switch to the adopted UUID.
+                    conn.commit()
+                    return {"id": iid, "display_name": inst["display_name"],
+                            "adopted": True, "error": "team_role_name_precedence"}
+
+        base = f"claude-{name}"
+        holder = conn.execute(
+            "SELECT * FROM instances WHERE display_name = ? AND id != ?",
+            (base, iid)
+        ).fetchone()
+        if holder and not _is_live(holder):
+            # Name-only reclaim: the stale holder loses the name (renamed to a
+            # fresh claude-N) but keeps its identity and inbox.
+            fallback = _next_unassigned_name(conn, exclude_id=holder["id"])
+            conn.execute("UPDATE instances SET display_name = ? WHERE id = ?",
+                         (fallback, holder["id"]))
+            _emit_event(conn, holder["id"], "identity_changed",
+                        {"display_name": fallback, "role": holder["role"],
+                         "team_id": holder["team_id"], "reason": "name_reclaimed_by_session"})
+
+        display = _claim_name(conn, base, exclude_id=iid)  # live holder -> -2 suffix
+        changed = display != inst["display_name"]
+        conn.execute(
+            "UPDATE instances SET display_name = ?, session_id = ? WHERE id = ?",
+            (display, session_id, iid)
+        )
+        if changed:
+            _emit_event(conn, iid, "identity_changed",
+                        {"display_name": display, "role": inst["role"],
+                         "team_id": inst["team_id"], "reason": "session_name"})
+        conn.commit()
+        return {"id": iid, "display_name": display, "adopted": adopted}
     finally:
         conn.close()
 
@@ -925,6 +1034,7 @@ def get_recipients():
                 "kind": r["kind"],
                 "team_id": r["team_id"],
                 "role": r["role"],
+                "session_id": r["session_id"],
                 "last_seen_ago": last_seen_ago,
             }
             instances_by_status[r["status"]].append(entry)
@@ -986,6 +1096,8 @@ def cleanup_loop():
 MCP_TOOLS = [
     {"name": "synapse_register", "description": "Register this session with Synapse v2. Returns stable id + display_name.",
      "inputSchema": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["claude", "admin"]}, "preferred_id": {"type": "string"}, "preferred_name": {"type": "string"}}, "required": ["kind"]}},
+    {"name": "synapse_set_name", "description": "Claim claude-{name} as display name (session-name sync). session_id proves continuity: a stale instance with the same session_id is adopted (identity takeover); a stale holder of the name is renamed away; a live holder yields a -2 suffix.",
+     "inputSchema": {"type": "object", "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "session_id": {"type": "string"}}, "required": ["id", "name"]}},
     {"name": "synapse_send", "description": "Send a message. `to` may be: 'claude' (admin only, global), 'claude-{team}' (team broadcast), 'claude-{team}-{role}' or 'claude-{role}' (DM by display name), 'admin' (admins), or any specific display name.",
      "inputSchema": {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}, "subject": {"type": "string"}, "body": {"type": "string"}}, "required": ["from", "to", "subject", "body"]}},
     {"name": "synapse_inbox", "description": "Your inbox (keyed by stable instance id).",
@@ -1102,6 +1214,8 @@ class V2Handler(BaseHTTPRequestHandler):
             return self._json(release_role(body.get("id")))
         if path == "/identity/set-team":
             return self._json(set_team(body.get("id"), body.get("team_id"), body.get("role"), body.get("by_id")))
+        if path == "/identity/set-name":
+            return self._json(set_name(body.get("id"), body.get("name"), body.get("session_id")))
         if path == "/groups":
             return self._json(create_group(body.get("name"), body.get("owner_id")))
         if path.startswith("/groups/") and path.endswith("/transfer-owner"):
@@ -1159,6 +1273,8 @@ def _dispatch_mcp(name, args):
         return get_recipients()
     if name == "synapse_set_role":
         return set_role(args.get("id"), args.get("role"))
+    if name == "synapse_set_name":
+        return set_name(args.get("id"), args.get("name"), args.get("session_id"))
     if name == "synapse_create_team":
         return create_group(args.get("name"), args.get("owner_id"))
     if name == "synapse_invite":
